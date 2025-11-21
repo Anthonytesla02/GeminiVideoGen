@@ -1,0 +1,5 @@
+{
+  "name": "Lumina AI Video Generator",
+  "description": "A high-efficiency, intelligent video generator powered by Gemini 2.5 Flash. Create professional video slideshows with AI-scripted narratives, generated voiceovers, and dynamic visuals—all optimized for speed and free-tier rate limits.",
+  "requestFramePermissions": []
+}
