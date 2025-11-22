@@ -7,6 +7,7 @@ export interface Scene {
   duration: number; // Estimated duration in seconds
   isGeneratingImage: boolean;
   isGeneratingAudio: boolean;
+  effect: 'zoom-in' | 'zoom-out' | 'pan-left' | 'pan-right';
 }
 
 export interface VideoProject {
@@ -41,8 +42,17 @@ export enum VideoStyle {
   MINIMALIST = 'Minimalist',
 }
 
+export enum VoiceName {
+  KORE = 'Kore',
+  PUCK = 'Puck',
+  CHARON = 'Charon',
+  FENRIR = 'Fenrir',
+  ZEPHYR = 'Zephyr',
+}
+
 export interface VideoConfig {
   format: VideoFormat;
   length: VideoLength;
   style: VideoStyle;
+  voice: VoiceName;
 }

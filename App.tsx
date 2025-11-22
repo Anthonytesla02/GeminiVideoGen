@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Scene, GenerationStep, VideoConfig, VideoLength, VideoStyle, VideoFormat } from './types';
+import { Scene, GenerationStep, VideoConfig, VideoLength, VideoStyle, VideoFormat, VoiceName } from './types';
 import { generateVideoScript, generateSceneImage, generateSceneAudio } from './services/geminiService';
 import Player from './components/Player';
 import Timeline from './components/Timeline';
-import { Sparkles, Video, AlertCircle, Zap, Command, Smartphone, Monitor, Palette, Clock } from 'lucide-react';
+import { Sparkles, Video, AlertCircle, Zap, Command, Smartphone, Palette, Clock, Mic, Download, FileText, Loader2 } from 'lucide-react';
 
 export default function App() {
   const [topic, setTopic] = useState('');
@@ -12,12 +12,16 @@ export default function App() {
   const [currentSceneIndex, setCurrentSceneIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  
+  // Export State
+  const [isExporting, setIsExporting] = useState(false);
 
   // Config State
   const [config, setConfig] = useState<VideoConfig>({
     format: 'landscape',
     length: VideoLength.SHORT,
     style: VideoStyle.REALISTIC,
+    voice: VoiceName.KORE,
   });
 
   const handleGenerate = async () => {
@@ -27,6 +31,7 @@ export default function App() {
     setStatus(GenerationStep.SCRIPTING);
     setScenes([]);
     setProgress(0);
+    setIsExporting(false);
 
     try {
       // 1. Generate Script
@@ -34,53 +39,41 @@ export default function App() {
       setScenes(generatedScenes);
       setStatus(GenerationStep.GENERATING_ASSETS);
 
-      // 2. Generate Assets with Batching (to respect Rate Limits)
-      // Rate Limit Strategy: Process 3 scenes at a time.
-      const BATCH_SIZE = 3; 
-      
-      // Create a local copy to update
-      let currentScenes = [...generatedScenes];
-
+      // 2. Generate Assets with Serial Execution (Safe for Free Tier)
       const updateSceneState = (id: number, updates: Partial<Scene>) => {
         setScenes(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
       };
 
       let completedCount = 0;
-      const totalTasks = generatedScenes.length * 2; // Image + Audio per scene
+      const totalTasks = generatedScenes.length * 2; 
 
-      for (let i = 0; i < generatedScenes.length; i += BATCH_SIZE) {
-        const batch = generatedScenes.slice(i, i + BATCH_SIZE);
-        
-        await Promise.all(batch.map(async (scene) => {
-          // Trigger Image
-          updateSceneState(scene.id, { isGeneratingImage: true });
-          generateSceneImage(scene.imagePrompt, config.format)
-            .then(url => {
-              updateSceneState(scene.id, { imageUrl: url, isGeneratingImage: false });
-              completedCount++;
-              setProgress((completedCount / totalTasks) * 100);
-            })
-            .catch(e => {
-              console.error(e);
-              updateSceneState(scene.id, { isGeneratingImage: false });
-            });
+      for (const scene of generatedScenes) {
+        // Start Image
+        updateSceneState(scene.id, { isGeneratingImage: true });
+        try {
+          const url = await generateSceneImage(scene.imagePrompt, config.format);
+          updateSceneState(scene.id, { imageUrl: url, isGeneratingImage: false });
+        } catch (e) {
+          console.error(e);
+          updateSceneState(scene.id, { isGeneratingImage: false });
+        }
+        completedCount++;
+        setProgress((completedCount / totalTasks) * 100);
 
-          // Trigger Audio
-          updateSceneState(scene.id, { isGeneratingAudio: true });
-          generateSceneAudio(scene.text)
-            .then(audio => {
-              updateSceneState(scene.id, { audioData: audio, isGeneratingAudio: false });
-              completedCount++;
-              setProgress((completedCount / totalTasks) * 100);
-            })
-            .catch(e => {
-               console.error(e);
-               updateSceneState(scene.id, { isGeneratingAudio: false });
-            });
-        }));
+        // Start Audio
+        updateSceneState(scene.id, { isGeneratingAudio: true });
+        try {
+          const audio = await generateSceneAudio(scene.text, config.voice);
+          updateSceneState(scene.id, { audioData: audio, isGeneratingAudio: false });
+        } catch (e) {
+           console.error(e);
+           updateSceneState(scene.id, { isGeneratingAudio: false });
+        }
+        completedCount++;
+        setProgress((completedCount / totalTasks) * 100);
 
-        // Minimal delay between batches to be safe with free tier
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Rate Limit Buffer
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
       
       setStatus(GenerationStep.READY);
@@ -99,8 +92,19 @@ export default function App() {
       newScenes.splice(toIndex, 0, moved);
       return newScenes;
     });
-    // Update current index if needed to track selection
     if (currentSceneIndex === fromIndex) setCurrentSceneIndex(toIndex);
+  };
+
+  const handleExport = () => {
+    if (status !== GenerationStep.READY) return;
+    // Start from beginning
+    setCurrentSceneIndex(0);
+    setIsExporting(true);
+  };
+
+  const handleExportComplete = () => {
+    setIsExporting(false);
+    setCurrentSceneIndex(0);
   };
 
   return (
@@ -121,7 +125,9 @@ export default function App() {
             </span>
           </div>
           <div className="flex items-center gap-4">
-             <div className="text-xs text-gray-500 font-mono hidden sm:block">v2.0 (Efficient)</div>
+             <a href="/GUIDE.md" target="_blank" className="flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-white transition-colors">
+               <FileText className="w-3 h-3" /> Documentation
+             </a>
              <div className="w-8 h-8 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center text-xs font-bold text-gray-400">
                 AI
              </div>
@@ -135,10 +141,10 @@ export default function App() {
         <div className="mb-12 max-w-4xl mx-auto space-y-6">
           <div className="text-center space-y-2">
             <h2 className="text-4xl md:text-5xl font-bold tracking-tight text-white">
-              Turn ideas into <span className="text-blue-500">video</span>.
+              Create viral <span className="text-blue-500">kinetic</span> video.
             </h2>
             <p className="text-lg text-gray-400 max-w-2xl mx-auto">
-              Intelligent script-to-video generation. Optimized for speed and efficiency.
+              Intelligent pacing, dynamic visuals, and professional audio engineering.
             </p>
           </div>
 
@@ -175,8 +181,23 @@ export default function App() {
                </select>
              </div>
 
+             {/* Voice Selector */}
+             <div className="flex flex-col gap-1">
+               <label className="text-[10px] uppercase text-gray-500 font-semibold tracking-wider flex items-center gap-1">
+                 <Mic className="w-3 h-3" /> Narrator
+               </label>
+               <select 
+                 className="bg-gray-800 border border-gray-700 text-sm rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                 value={config.voice}
+                 onChange={(e) => setConfig({...config, voice: e.target.value as VoiceName})}
+                 disabled={status !== GenerationStep.IDLE && status !== GenerationStep.READY}
+               >
+                 {Object.values(VoiceName).map(v => <option key={v} value={v}>{v}</option>)}
+               </select>
+             </div>
+
              {/* Length */}
-             <div className="flex flex-col gap-1 col-span-2 md:col-span-2">
+             <div className="flex flex-col gap-1">
                <label className="text-[10px] uppercase text-gray-500 font-semibold tracking-wider flex items-center gap-1">
                  <Clock className="w-3 h-3" /> Duration
                </label>
@@ -236,6 +257,20 @@ export default function App() {
         {scenes.length > 0 && (
           <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 space-y-8">
              
+             {/* Action Bar */}
+             {status === GenerationStep.READY && (
+               <div className="flex justify-end">
+                  <button 
+                    onClick={handleExport}
+                    disabled={isExporting}
+                    className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors shadow-lg shadow-green-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                    {isExporting ? "Rendering..." : "Export Video"}
+                  </button>
+               </div>
+             )}
+
              {/* Player & Details Area */}
              <div className="grid lg:grid-cols-3 gap-8">
                 {/* Main Player */}
@@ -246,6 +281,8 @@ export default function App() {
                        currentSceneIndex={currentSceneIndex}
                        onSceneChange={setCurrentSceneIndex}
                        format={config.format}
+                       isExporting={isExporting}
+                       onExportComplete={handleExportComplete}
                      />
                    </div>
                 </div>
@@ -254,37 +291,26 @@ export default function App() {
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 h-full max-h-[600px] overflow-y-auto custom-scrollbar flex flex-col">
                   <h3 className="text-lg font-semibold mb-4 text-gray-200 flex items-center gap-2">
                     <span className="w-2 h-6 bg-blue-500 rounded-full"></span>
-                    Script & Scenes
+                    Shot List
                   </h3>
                   
-                  <div className="space-y-4 flex-1">
+                  <div className="space-y-2 flex-1">
                     {scenes.map((scene, idx) => (
                       <div 
                         key={scene.id} 
-                        onClick={() => setCurrentSceneIndex(idx)}
-                        className={`p-4 rounded-lg border transition-all cursor-pointer ${idx === currentSceneIndex ? 'bg-gray-800 border-blue-500/50' : 'bg-gray-800/30 border-transparent hover:bg-gray-800'}`}
+                        onClick={() => !isExporting && setCurrentSceneIndex(idx)}
+                        className={`p-3 rounded-lg border transition-all cursor-pointer flex gap-3 
+                          ${idx === currentSceneIndex ? 'bg-gray-800 border-blue-500/50' : 'bg-gray-800/30 border-transparent hover:bg-gray-800'}
+                          ${isExporting ? 'cursor-not-allowed opacity-50' : ''}
+                        `}
                       >
-                        <div className="flex justify-between items-start mb-2">
-                          <span className="text-xs font-mono text-blue-400">Scene {idx + 1}</span>
-                          <div className="flex gap-1">
-                             {/* Simple Reorder Buttons for Accessibility */}
-                             <button 
-                               onClick={(e) => { e.stopPropagation(); handleReorder(idx, idx - 1); }}
-                               disabled={idx === 0}
-                               className="text-gray-600 hover:text-white disabled:opacity-0"
-                             >↑</button>
-                             <button 
-                               onClick={(e) => { e.stopPropagation(); handleReorder(idx, idx + 1); }}
-                               disabled={idx === scenes.length - 1}
-                               className="text-gray-600 hover:text-white disabled:opacity-0"
-                             >↓</button>
-                          </div>
-                        </div>
-                        <p className="text-gray-300 text-sm leading-relaxed mb-3">"{scene.text}"</p>
-                        <div className="text-xs text-gray-500 bg-black/20 p-2 rounded border border-gray-700/50">
-                           <span className="uppercase tracking-wider text-[10px] text-gray-600 font-bold block mb-1">Prompt</span>
-                           {scene.imagePrompt}
-                        </div>
+                         <div className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-700 flex items-center justify-center text-[10px] font-mono text-gray-400">
+                            {idx + 1}
+                         </div>
+                         <div className="flex-1">
+                            <p className="text-gray-200 text-sm font-medium mb-1">"{scene.text}"</p>
+                            <p className="text-xs text-gray-500 line-clamp-1">{scene.imagePrompt}</p>
+                         </div>
                       </div>
                     ))}
                   </div>
@@ -293,11 +319,11 @@ export default function App() {
 
              {/* Timeline Area */}
              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                <div className="mb-2 text-xs text-gray-500 font-mono uppercase tracking-wider">Timeline (Drag to Reorder)</div>
+                <div className="mb-2 text-xs text-gray-500 font-mono uppercase tracking-wider">Timeline</div>
                 <Timeline 
                   scenes={scenes}
                   currentSceneIndex={currentSceneIndex}
-                  onSceneSelect={setCurrentSceneIndex}
+                  onSceneSelect={(idx) => !isExporting && setCurrentSceneIndex(idx)}
                   onReorder={handleReorder}
                 />
              </div>
