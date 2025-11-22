@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Scene } from '../types';
+import { Scene, VideoFormat } from '../types';
 import { decodeBase64, decodeAudioData } from '../utils/audioUtils';
 import { Play, Pause, SkipForward, SkipBack, Loader2 } from 'lucide-react';
 
@@ -7,16 +7,14 @@ interface PlayerProps {
   scenes: Scene[];
   currentSceneIndex: number;
   onSceneChange: (index: number) => void;
+  format: VideoFormat;
 }
 
-const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChange }) => {
+const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChange, format }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const startTimeRef = useRef<number>(0);
-  const animationFrameRef = useRef<number>(0);
 
   const currentScene = scenes[currentSceneIndex];
 
@@ -54,7 +52,6 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
 
       source.start(0);
       activeSourceRef.current = source;
-      startTimeRef.current = audioContextRef.current.currentTime;
 
     } catch (e) {
       console.error("Audio playback error", e);
@@ -71,7 +68,7 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, currentSceneIndex]); // Depend on Index change to re-trigger for next scene
+  }, [isPlaying, currentSceneIndex]);
 
   const togglePlay = () => {
     setIsPlaying(!isPlaying);
@@ -92,35 +89,30 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
     }
   };
 
-  // Visual Rendering
   useEffect(() => {
-    // Reset progress on scene change
     setProgress(0);
   }, [currentSceneIndex]);
 
-  // Progress Bar Simulation
   useEffect(() => {
     if (!isPlaying) return;
-    
     const interval = setInterval(() => {
       setProgress((prev) => Math.min(prev + 1, 100));
-    }, 50); // Arbitrary progress speed since we lack exact duration metadata from raw PCM easily without decoding first
-    
+    }, 50);
     return () => clearInterval(interval);
   }, [isPlaying, currentSceneIndex]);
 
   if (!currentScene) {
     return (
-      <div className="w-full aspect-video bg-black flex items-center justify-center rounded-lg shadow-2xl border border-gray-800">
+      <div className={`w-full bg-black flex items-center justify-center rounded-lg shadow-2xl border border-gray-800 ${format === 'portrait' ? 'aspect-[9/16]' : 'aspect-video'}`}>
         <p className="text-gray-500">No scenes generated yet.</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-4 w-full max-w-4xl mx-auto">
+    <div className="flex flex-col gap-4 w-full">
       {/* Viewport */}
-      <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-gray-800 group">
+      <div className={`relative w-full bg-black rounded-xl overflow-hidden shadow-2xl border border-gray-800 group ${format === 'portrait' ? 'aspect-[9/16]' : 'aspect-video'}`}>
         {/* Image Layer */}
         {currentScene.imageUrl ? (
           <img
@@ -137,13 +129,13 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
         )}
 
         {/* Subtitles Overlay */}
-        <div className="absolute bottom-12 left-0 right-0 p-6 text-center">
-            <span className="inline-block bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-lg text-lg md:text-xl font-medium shadow-lg max-w-[80%]">
+        <div className="absolute bottom-[10%] left-0 right-0 px-6 text-center flex justify-center">
+            <span className="inline-block bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-lg text-lg md:text-xl font-medium shadow-lg max-w-[90%]">
               {currentScene.text}
             </span>
         </div>
 
-        {/* Controls Overlay (Visible on hover or paused) */}
+        {/* Controls Overlay */}
         <div className={`absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${!isPlaying ? 'opacity-100' : ''}`}>
            <button 
              onClick={togglePlay}
@@ -171,7 +163,7 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
          <div className="flex items-center gap-2">
            {currentScene.isGeneratingAudio && (
              <span className="text-xs text-blue-400 flex items-center gap-1">
-               <Loader2 className="w-3 h-3 animate-spin" /> Synthesizing Audio
+               <Loader2 className="w-3 h-3 animate-spin" /> Synthesizing
              </span>
            )}
            <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>

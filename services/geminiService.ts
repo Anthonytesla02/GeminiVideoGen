@@ -1,22 +1,39 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { Scene } from "../types";
+import { Scene, VideoConfig, VideoLength, VideoFormat } from "../types";
 
 const apiKey = process.env.API_KEY || '';
 const ai = new GoogleGenAI({ apiKey });
 
 // --- Models ---
-// Using 2.5 Flash for everything to maximize speed and rate limits for the user
 const SCRIPT_MODEL = "gemini-2.5-flash"; 
 const IMAGE_MODEL = "gemini-2.5-flash-image"; 
 const AUDIO_MODEL = "gemini-2.5-flash-preview-tts";
 
-export const generateVideoScript = async (topic: string): Promise<Scene[]> => {
+const getSceneCount = (length: VideoLength): number => {
+  switch (length) {
+    case VideoLength.SHORT: return 5;   // ~50s
+    case VideoLength.SEMI: return 12;   // ~2-3 mins
+    case VideoLength.MEDIUM: return 24; // ~5-8 mins
+    case VideoLength.LONG: return 40;   // ~10+ mins (Soft cap for rate limits)
+    default: return 5;
+  }
+};
+
+export const generateVideoScript = async (topic: string, config: VideoConfig): Promise<Scene[]> => {
+  const sceneCount = getSceneCount(config.length);
+  
   const prompt = `
-    Create a 4-scene video script about: "${topic}".
-    The tone should be engaging and professional (like Invideo).
+    Create a ${sceneCount}-scene video script about: "${topic}".
+    Video Style: ${config.style}.
+    Video Format: ${config.format}.
+    
+    The tone should be engaging and professional.
     Each scene must have:
-    1. "text": The voiceover script (keep it under 20 words per scene).
-    2. "imagePrompt": A highly detailed, cinematic description of the visual background for this scene. Avoid text in images.
+    1. "text": The voiceover script (approx 15-20 words).
+    2. "imagePrompt": A highly detailed description of the visual background for this scene. 
+       Style instruction: strictly adhere to a "${config.style}" aesthetic.
+       Format instruction: Describe elements suitable for ${config.format} framing.
+       Avoid text in images.
     
     Return strictly JSON.
   `;
@@ -46,7 +63,7 @@ export const generateVideoScript = async (topic: string): Promise<Scene[]> => {
 
     const rawScenes = JSON.parse(jsonText);
     return rawScenes.map((s: any, index: number) => ({
-      id: index,
+      id: Date.now() + index,
       text: s.text,
       imagePrompt: s.imagePrompt,
       duration: 5, // Default fallback duration
@@ -60,17 +77,19 @@ export const generateVideoScript = async (topic: string): Promise<Scene[]> => {
   }
 };
 
-export const generateSceneImage = async (prompt: string): Promise<string> => {
+export const generateSceneImage = async (prompt: string, format: VideoFormat): Promise<string> => {
   try {
+    const aspectRatio = format === 'portrait' ? '9:16' : '16:9';
+    
     const response = await ai.models.generateContent({
       model: IMAGE_MODEL,
       contents: {
         parts: [{ text: prompt }],
       },
       config: {
-        // Image config works differently for flash-image vs imagen.
-        // For flash-image, we just prompt.
-        // Using standard generation, expecting inlineData in response.
+        imageConfig: {
+          aspectRatio: aspectRatio, 
+        }
       },
     });
 
@@ -87,7 +106,7 @@ export const generateSceneImage = async (prompt: string): Promise<string> => {
   } catch (error) {
     console.error("Image Gen Error:", error);
     // Return a placeholder if generation fails to keep the app running
-    return `https://picsum.photos/seed/${Math.random()}/1024/1024`;
+    return `https://placehold.co/${format === 'portrait' ? '720x1280' : '1280x720'}/1f2937/FFFFFF/png?text=Image+Generation+Failed`;
   }
 };
 

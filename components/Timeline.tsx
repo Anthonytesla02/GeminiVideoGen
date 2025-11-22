@@ -1,25 +1,51 @@
 import React from 'react';
 import { Scene } from '../types';
-import { Image as ImageIcon, Mic, CheckCircle2, Loader2 } from 'lucide-react';
+import { Image as ImageIcon, Mic, Loader2, GripVertical } from 'lucide-react';
 
 interface TimelineProps {
   scenes: Scene[];
   currentSceneIndex: number;
   onSceneSelect: (index: number) => void;
+  onReorder: (fromIdx: number, toIdx: number) => void;
 }
 
-const Timeline: React.FC<TimelineProps> = ({ scenes, currentSceneIndex, onSceneSelect }) => {
+const Timeline: React.FC<TimelineProps> = ({ scenes, currentSceneIndex, onSceneSelect, onReorder }) => {
+  
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    e.dataTransfer.setData("text/plain", index.toString());
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDrop = (e: React.DragEvent, dropIndex: number) => {
+    e.preventDefault();
+    const dragIndexStr = e.dataTransfer.getData("text/plain");
+    if (dragIndexStr !== "") {
+      const dragIndex = parseInt(dragIndexStr, 10);
+      if (dragIndex !== dropIndex) {
+        onReorder(dragIndex, dropIndex);
+      }
+    }
+  };
+
   return (
-    <div className="w-full overflow-x-auto pb-4 pt-2">
+    <div className="w-full overflow-x-auto pb-4 pt-2 custom-scrollbar">
       <div className="flex gap-4 min-w-max px-1">
         {scenes.map((scene, index) => {
           const isActive = index === currentSceneIndex;
-          const hasImage = !!scene.imageUrl;
           const hasAudio = !!scene.audioData;
           
           return (
             <div 
               key={scene.id}
+              draggable
+              onDragStart={(e) => handleDragStart(e, index)}
+              onDragOver={handleDragOver}
+              onDrop={(e) => handleDrop(e, index)}
               onClick={() => onSceneSelect(index)}
               className={`
                 relative w-48 h-28 rounded-lg border-2 cursor-pointer transition-all duration-200 flex-shrink-0 overflow-hidden group
@@ -29,7 +55,7 @@ const Timeline: React.FC<TimelineProps> = ({ scenes, currentSceneIndex, onSceneS
             >
               {/* Thumbnail */}
               {scene.imageUrl ? (
-                <img src={scene.imageUrl} alt={`Scene ${index + 1}`} className="w-full h-full object-cover" />
+                <img src={scene.imageUrl} alt={`Scene ${index + 1}`} className="w-full h-full object-cover select-none" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-gray-800">
                    {scene.isGeneratingImage ? <Loader2 className="w-6 h-6 animate-spin text-blue-400" /> : <ImageIcon className="w-6 h-6 text-gray-600" />}
@@ -42,13 +68,12 @@ const Timeline: React.FC<TimelineProps> = ({ scenes, currentSceneIndex, onSceneS
                    <Loader2 className="w-4 h-4 text-blue-400 animate-spin bg-black/50 rounded-full p-0.5" />
                 ) : hasAudio ? (
                    <Mic className="w-4 h-4 text-green-400 bg-black/50 rounded-full p-0.5" />
-                ) : (
-                   <Mic className="w-4 h-4 text-gray-500 bg-black/50 rounded-full p-0.5" />
-                )}
+                ) : null}
               </div>
 
               {/* Scene Number */}
-              <div className="absolute top-1 left-1 bg-black/60 backdrop-blur px-1.5 rounded text-xs font-mono text-white">
+              <div className="absolute top-1 left-1 bg-black/60 backdrop-blur px-1.5 rounded text-xs font-mono text-white flex items-center gap-1">
+                <GripVertical className="w-3 h-3 opacity-50 cursor-grab" />
                 #{index + 1}
               </div>
               

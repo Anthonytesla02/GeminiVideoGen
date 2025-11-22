@@ -22,3 +22,27 @@ export enum GenerationStep {
   GENERATING_ASSETS = 'GENERATING_ASSETS',
   READY = 'READY',
 }
+
+export type VideoFormat = 'landscape' | 'portrait';
+
+export enum VideoLength {
+  SHORT = 'Short (< 60s)',
+  SEMI = 'Semi (2-5 min)',
+  MEDIUM = 'Medium (5-10 min)',
+  LONG = 'Long (10-30 min)',
+}
+
+export enum VideoStyle {
+  REALISTIC = 'Realistic',
+  CINEMATIC = 'Cinematic',
+  ANIME = 'Anime',
+  CYBERPUNK = 'Cyberpunk',
+  WATERCOLOR = 'Watercolor',
+  MINIMALIST = 'Minimalist',
+}
+
+export interface VideoConfig {
+  format: VideoFormat;
+  length: VideoLength;
+  style: VideoStyle;
+}
