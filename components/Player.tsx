@@ -1,26 +1,28 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Scene, VideoFormat } from '../types';
-import { decodeBase64, decodeAudioData, createBassBoost, playPopSFX, playWhooshSFX, createLofiDrone } from '../utils/audioUtils';
-import { Play, Pause, SkipForward, SkipBack, Loader2, Volume2, VolumeX, Download } from 'lucide-react';
+import { Scene, VideoFormat, VideoLength } from '../types';
+import { decodeBase64, decodeAudioData, createBassBoost } from '../utils/audioUtils';
+import { Play, Pause, SkipForward, SkipBack, Loader2, Volume2, VolumeX } from 'lucide-react';
 
 interface PlayerProps {
   scenes: Scene[];
   currentSceneIndex: number;
   onSceneChange: (index: number) => void;
   format: VideoFormat;
+  videoLength: VideoLength;
   isExporting: boolean;
   onExportComplete: () => void;
 }
 
-const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChange, format, isExporting, onExportComplete }) => {
+const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChange, format, videoLength, isExporting, onExportComplete }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   
   // Refs
   const audioContextRef = useRef<AudioContext | null>(null);
-  const bgMusicGainRef = useRef<GainNode | null>(null);
   const voiceSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const bgMusicSourceRef = useRef<AudioNode | null>(null);
+  
+  // Buffer Cache for Gapless Playback
+  const nextAudioBufferRef = useRef<AudioBuffer | null>(null);
   
   // Export Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -30,6 +32,9 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
   const animationFrameRef = useRef<number | null>(null);
 
   const currentScene = scenes[currentSceneIndex];
+  
+  // Strict Logic: Kinetic Captions ONLY for Short Form (<60s) AND Portrait
+  const isKineticMode = videoLength === VideoLength.SHORT && format === 'portrait';
 
   // --- Initialization ---
   useEffect(() => {
@@ -38,7 +43,7 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
     }
     return () => {
       audioContextRef.current?.close();
-      cancelAnimationFrame(animationFrameRef.current!);
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
   }, []);
 
@@ -46,43 +51,61 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
   const ensureAudioGraph = () => {
     const ctx = audioContextRef.current;
     if (!ctx) return null;
-
-    // Resume if suspended
     if (ctx.state === 'suspended') ctx.resume();
-
-    // Create Background Music if missing
-    if (!bgMusicSourceRef.current) {
-      const drone = createLofiDrone(ctx);
-      const gain = ctx.createGain();
-      gain.gain.value = 0.05;
-      
-      drone.connect(gain);
-      
-      // Connect to destination (speakers) AND export node if exporting
-      gain.connect(ctx.destination);
-      
-      bgMusicSourceRef.current = drone;
-      bgMusicGainRef.current = gain;
-    }
-
     return ctx;
+  };
+
+  // --- Audio Preloading (The Fix for "Presentation" Feel) ---
+  const preloadNextAudio = async (index: number) => {
+    const nextIndex = index + 1;
+    if (nextIndex >= scenes.length) return;
+    
+    const nextScene = scenes[nextIndex];
+    if (!nextScene.audioData) return;
+
+    const ctx = ensureAudioGraph();
+    if (!ctx) return;
+
+    try {
+      const rawBytes = decodeBase64(nextScene.audioData);
+      const buffer = await decodeAudioData(rawBytes, ctx);
+      nextAudioBufferRef.current = buffer;
+    } catch (e) {
+      console.warn("Failed to preload next audio", e);
+    }
   };
 
   // --- Playback Logic ---
   const playSceneAudio = async (scene: Scene, isExportRun = false) => {
     const ctx = ensureAudioGraph();
     if (!ctx || !scene.audioData) {
+      // If no audio, wait duration then next
       if (isPlaying || isExportRun) setTimeout(() => handleNext(isExportRun), 3000);
       return;
     }
 
     try {
       // Stop previous
-      if (voiceSourceRef.current) voiceSourceRef.current.stop();
+      if (voiceSourceRef.current) {
+        try { voiceSourceRef.current.stop(); } catch (e) {}
+      }
 
-      // Decode
-      const rawBytes = decodeBase64(scene.audioData);
-      const audioBuffer = await decodeAudioData(rawBytes, ctx);
+      let audioBuffer: AudioBuffer;
+
+      // Check if we have preloaded this specific buffer
+      // Note: In a real app we'd map ID to buffer, but simpler here: 
+      // if nextAudioBufferRef is populated, we assume it's for the *current* scene (since we preloaded it during the previous one)
+      // However, on random seek, we must decode.
+      // Optimization: Only use cached if we came from previous index naturally? 
+      // For simplicity: We try to use cached, if not, decode.
+      
+      if (nextAudioBufferRef.current) {
+         audioBuffer = nextAudioBufferRef.current;
+         nextAudioBufferRef.current = null; // Clear usage
+      } else {
+         const rawBytes = decodeBase64(scene.audioData);
+         audioBuffer = await decodeAudioData(rawBytes, ctx);
+      }
 
       // Create Source
       const source = ctx.createBufferSource();
@@ -100,30 +123,10 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
       // Connect to Export Destination if recording
       if (isExportRun && destNodeRef.current) {
         mainGain.connect(destNodeRef.current);
-        if (bgMusicGainRef.current) bgMusicGainRef.current.connect(destNodeRef.current);
-      }
-
-      // Auto-Ducking
-      if (bgMusicGainRef.current) {
-        bgMusicGainRef.current.gain.setTargetAtTime(0.02, ctx.currentTime, 0.1);
-      }
-
-      // SFX
-      if ((!isMuted || isExportRun)) {
-        // We need to connect SFX to both speakers and export node
-        const sfxDest = ctx.createGain();
-        sfxDest.connect(ctx.destination);
-        if (isExportRun && destNodeRef.current) sfxDest.connect(destNodeRef.current);
-        
-        playWhooshSFX(ctx, sfxDest);
-        setTimeout(() => playPopSFX(ctx, sfxDest), 200);
       }
 
       // End Handler
       source.onended = () => {
-        if (bgMusicGainRef.current) {
-          bgMusicGainRef.current.gain.setTargetAtTime(0.05, ctx.currentTime, 0.5);
-        }
         if (isPlaying || isExportRun) handleNext(isExportRun);
       };
 
@@ -136,6 +139,11 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
       if (isExportRun) {
         const duration = audioBuffer.duration;
         startCanvasAnimation(scene, startTime, duration);
+      }
+
+      // Preload NEXT audio immediately while this one plays
+      if (!isExportRun && isPlaying) {
+        preloadNextAudio(currentSceneIndex);
       }
 
     } catch (e) {
@@ -164,6 +172,8 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
 
   const togglePlay = () => {
     if (audioContextRef.current?.state === 'suspended') audioContextRef.current.resume();
+    // If starting play, clear any stale buffer and maybe decode current
+    if (!isPlaying) nextAudioBufferRef.current = null; 
     setIsPlaying(!isPlaying);
   };
 
@@ -175,12 +185,10 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExporting, currentSceneIndex]); 
-  // Note: Dependency on currentSceneIndex is crucial for the sequential play loop during export
 
   const startExportSequence = async () => {
     if (currentSceneIndex === 0 && !mediaRecorderRef.current) {
       // Start of Export
-      console.log("Starting Export...");
       const ctx = ensureAudioGraph();
       if (!ctx || !canvasRef.current) return;
 
@@ -197,7 +205,7 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
 
       const recorder = new MediaRecorder(combinedStream, {
         mimeType: 'video/webm;codecs=vp9',
-        videoBitsPerSecond: 2500000 // 2.5 Mbps
+        videoBitsPerSecond: 4000000 // 4 Mbps
       });
 
       recorder.ondataavailable = (e) => {
@@ -205,7 +213,6 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
       };
 
       recorder.onstop = () => {
-        console.log("Export Finished.");
         const blob = new Blob(chunksRef.current, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
         
@@ -246,7 +253,7 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
     if (!ctx || !canvas || !canvasCtx || !scene.imageUrl) return;
 
     const img = new Image();
-    img.crossOrigin = "anonymous"; // data urls are fine
+    img.crossOrigin = "anonymous";
     img.src = scene.imageUrl;
 
     const render = () => {
@@ -273,7 +280,7 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
           break;
         case 'pan-left':
           scale = 1.1;
-          translateX = 0 - (30 * progress); // Shift left (pixels approximation)
+          translateX = 0 - (30 * progress);
           break;
         case 'pan-right':
           scale = 1.1;
@@ -287,8 +294,6 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
       canvasCtx.scale(scale, scale);
       canvasCtx.translate(-canvas.width / 2 + translateX, -canvas.height / 2);
       
-      // Draw image centered and covering
-      // Simple "cover" logic
       const imgRatio = img.width / img.height;
       const canvasRatio = canvas.width / canvas.height;
       let renderW, renderH;
@@ -303,7 +308,7 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
       canvasCtx.drawImage(img, (canvas.width - renderW) / 2, (canvas.height - renderH) / 2, renderW, renderH);
       canvasCtx.restore();
 
-      // --- Draw Film Grain Overlay (Simple Noise) ---
+      // --- Draw Film Grain Overlay ---
       canvasCtx.fillStyle = "rgba(255,255,255,0.05)";
       for (let i = 0; i < 50; i++) {
          canvasCtx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 2, 2);
@@ -326,79 +331,120 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
 
   const drawCanvasText = (ctx: CanvasRenderingContext2D, text: string, w: number, h: number) => {
     ctx.save();
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
     
-    // Font Settings matching CSS
-    const fontSize = format === 'portrait' ? 60 : 80;
-    ctx.font = `900 ${fontSize}px Montserrat, sans-serif`;
-    
-    // Shadow
-    ctx.shadowColor = "rgba(0,0,0,1)";
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 4;
-    ctx.shadowOffsetY = 4;
+    if (isKineticMode) {
+      // --- KINETIC: Center, Big ---
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const fontSize = format === 'portrait' ? 60 : 80;
+      ctx.font = `900 ${fontSize}px Montserrat, sans-serif`;
+      ctx.shadowColor = "rgba(0,0,0,1)";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 4;
+      ctx.shadowOffsetY = 4;
 
-    // Word Wrapping & Highlight parsing
-    const words = text.split(' ');
-    let lines: {text: string, isHighlight: boolean}[][] = [[]];
-    let currentLineIdx = 0;
-    let currentLineWidth = 0;
-    const maxLineWidth = w * 0.8;
+      const words = text.split(' ');
+      let lines: {text: string, isHighlight: boolean}[][] = [[]];
+      let currentLineIdx = 0;
+      let currentLineWidth = 0;
+      const maxLineWidth = w * 0.8;
 
-    words.forEach(word => {
-      const cleanWord = word.replace(/\*/g, '');
-      const width = ctx.measureText(cleanWord + " ").width;
-      
-      if (currentLineWidth + width > maxLineWidth) {
-        currentLineIdx++;
-        lines[currentLineIdx] = [];
-        currentLineWidth = 0;
-      }
-      
-      lines[currentLineIdx].push({
-        text: cleanWord,
-        isHighlight: word.includes('*')
+      words.forEach(word => {
+        const cleanWord = word.replace(/\*/g, '');
+        const width = ctx.measureText(cleanWord + " ").width;
+        
+        if (currentLineWidth + width > maxLineWidth) {
+          currentLineIdx++;
+          lines[currentLineIdx] = [];
+          currentLineWidth = 0;
+        }
+        
+        lines[currentLineIdx].push({
+          text: cleanWord,
+          isHighlight: word.includes('*')
+        });
+        currentLineWidth += width;
       });
-      currentLineWidth += width;
-    });
 
-    // Draw Lines
-    const totalHeight = lines.length * (fontSize * 1.2);
-    let startY = (h - totalHeight) / 2 + (fontSize / 2);
+      const totalHeight = lines.length * (fontSize * 1.2);
+      let startY = (h - totalHeight) / 2 + (fontSize / 2);
 
-    lines.forEach((line) => {
-       // Calculate total width of line to center exact words
-       const lineWidth = line.reduce((acc, item) => acc + ctx.measureText(item.text + " ").width, 0);
-       let startX = (w - lineWidth) / 2;
+      lines.forEach((line) => {
+         const lineWidth = line.reduce((acc, item) => acc + ctx.measureText(item.text + " ").width, 0);
+         let startX = (w - lineWidth) / 2;
 
-       line.forEach(item => {
-         ctx.fillStyle = item.isHighlight ? '#FFD700' : '#FFFFFF';
-         if (item.isHighlight) {
-             ctx.shadowColor = "rgba(255, 215, 0, 0.5)";
-             ctx.shadowBlur = 20;
-         } else {
-             ctx.shadowColor = "rgba(0,0,0,1)";
-             ctx.shadowBlur = 0;
-         }
-         
-         ctx.fillText(item.text, startX + (ctx.measureText(item.text).width/2), startY);
-         startX += ctx.measureText(item.text + " ").width;
-       });
-       startY += fontSize * 1.2;
-    });
+         line.forEach(item => {
+           ctx.fillStyle = item.isHighlight ? '#FFD700' : '#FFFFFF';
+           if (item.isHighlight) {
+               ctx.shadowColor = "rgba(255, 215, 0, 0.5)";
+               ctx.shadowBlur = 20;
+           } else {
+               ctx.shadowColor = "rgba(0,0,0,1)";
+               ctx.shadowBlur = 0;
+           }
+           ctx.fillText(item.text, startX + (ctx.measureText(item.text).width/2), startY);
+           startX += ctx.measureText(item.text + " ").width;
+         });
+         startY += fontSize * 1.2;
+      });
+
+    } else {
+      // --- SUBTITLE: Bottom, Smaller ---
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      const fontSize = format === 'portrait' ? 28 : 36; // Smaller font
+      ctx.font = `700 ${fontSize}px Montserrat, sans-serif`;
+      
+      const cleanText = text.replace(/\*/g, '');
+      const maxWidth = w * 0.8; // More padding
+      
+      const words = cleanText.split(' ');
+      let lines = [];
+      let currentLine = words[0];
+
+      for (let i = 1; i < words.length; i++) {
+        const width = ctx.measureText(currentLine + " " + words[i]).width;
+        if (width < maxWidth) {
+          currentLine += " " + words[i];
+        } else {
+          lines.push(currentLine);
+          currentLine = words[i];
+        }
+      }
+      lines.push(currentLine);
+
+      // Draw Background Box
+      const lineHeight = fontSize * 1.5;
+      const bottomMargin = h * 0.1; // 10% from bottom
+
+      let y = h - bottomMargin - ((lines.length - 1) * lineHeight);
+
+      lines.forEach(line => {
+        // Draw backing for readability
+        const lineWidth = ctx.measureText(line).width;
+        ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+        ctx.fillRect((w/2) - (lineWidth/2) - 10, y - lineHeight + 10, lineWidth + 20, lineHeight);
+        
+        ctx.fillStyle = "#FFFFFF";
+        ctx.shadowColor = "rgba(0,0,0,0.8)";
+        ctx.shadowBlur = 4;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
+        ctx.fillText(line, w/2, y);
+        y += lineHeight;
+      });
+    }
 
     ctx.restore();
   };
 
   // --- Normal DOM Rendering ---
-  // (Same as before, but we listen to isPlaying)
   useEffect(() => {
     if (isPlaying && currentScene && !isExporting) {
       playSceneAudio(currentScene);
     } else if (!isPlaying && !isExporting) {
       if (voiceSourceRef.current) {
-        voiceSourceRef.current.stop();
+        try { voiceSourceRef.current.stop(); } catch(e) {}
         voiceSourceRef.current = null;
       }
     }
@@ -406,11 +452,14 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
   }, [isPlaying, currentSceneIndex]);
 
 
-  // --- Render ---
+  // --- Render DOM ---
   const effectClass = isPlaying && currentScene?.imageUrl ? `effect-${currentScene.effect}` : '';
 
   // Helper to render DOM text
   const renderDOMText = (text: string) => {
+    if (!isKineticMode) return text.replace(/\*/g, ''); // Clean text for subtitle
+    
+    // Kinetic parsing for shorts
     const parts = text.split(/(\*[^*]+\*)/g);
     return parts.map((part, i) => {
       if (part.startsWith('*') && part.endsWith('*')) {
@@ -467,13 +516,27 @@ const Player: React.FC<PlayerProps> = ({ scenes, currentSceneIndex, onSceneChang
           </div>
         )}
 
-        {/* Kinetic Typography Overlay */}
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none p-8">
-            <div className="text-center max-w-full">
-              <h1 className="text-4xl md:text-5xl lg:text-6xl font-black uppercase tracking-tighter leading-tight text-white text-shadow-strong drop-shadow-2xl">
-                {renderDOMText(currentScene.text)}
-              </h1>
-            </div>
+        {/* Text Overlay Layer */}
+        <div className="absolute inset-0 pointer-events-none">
+            {isKineticMode ? (
+              /* KINETIC: Short Form + Portrait ONLY */
+              <div className="flex items-center justify-center w-full h-full p-8">
+                <div className="text-center max-w-full">
+                  <h1 className="text-4xl md:text-5xl lg:text-6xl font-black uppercase tracking-tighter leading-tight text-white text-shadow-strong drop-shadow-2xl">
+                    {renderDOMText(currentScene.text)}
+                  </h1>
+                </div>
+              </div>
+            ) : (
+              /* SUBTITLE: Long Form or Landscape */
+              <div className="flex items-end justify-center w-full h-full pb-12 px-8">
+                 <div className="bg-black/70 backdrop-blur-sm px-6 py-4 rounded-lg max-w-4xl text-center shadow-lg border border-white/5">
+                    <p className="text-lg md:text-xl font-bold text-white leading-relaxed drop-shadow-md">
+                       {renderDOMText(currentScene.text)}
+                    </p>
+                 </div>
+              </div>
+            )}
         </div>
 
         {/* Controls Overlay */}

@@ -3,7 +3,7 @@ import { Scene, GenerationStep, VideoConfig, VideoLength, VideoStyle, VideoForma
 import { generateVideoScript, generateSceneImage, generateSceneAudio } from './services/geminiService';
 import Player from './components/Player';
 import Timeline from './components/Timeline';
-import { Sparkles, Video, AlertCircle, Zap, Command, Smartphone, Palette, Clock, Mic, Download, FileText, Loader2 } from 'lucide-react';
+import { Sparkles, Video, AlertCircle, Zap, Command, Smartphone, Palette, Clock, Mic, Download, FileText, Loader2, Copy, Check } from 'lucide-react';
 
 export default function App() {
   const [topic, setTopic] = useState('');
@@ -13,8 +13,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   
-  // Export State
+  // UI State
   const [isExporting, setIsExporting] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
 
   // Config State
   const [config, setConfig] = useState<VideoConfig>({
@@ -97,7 +98,6 @@ export default function App() {
 
   const handleExport = () => {
     if (status !== GenerationStep.READY) return;
-    // Start from beginning
     setCurrentSceneIndex(0);
     setIsExporting(true);
   };
@@ -105,6 +105,13 @@ export default function App() {
   const handleExportComplete = () => {
     setIsExporting(false);
     setCurrentSceneIndex(0);
+  };
+
+  const handleCopyTranscript = () => {
+    const fullText = scenes.map(s => s.text.replace(/\*/g, '')).join(' ');
+    navigator.clipboard.writeText(fullText);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
   };
 
   return (
@@ -281,6 +288,7 @@ export default function App() {
                        currentSceneIndex={currentSceneIndex}
                        onSceneChange={setCurrentSceneIndex}
                        format={config.format}
+                       videoLength={config.length}
                        isExporting={isExporting}
                        onExportComplete={handleExportComplete}
                      />
@@ -289,10 +297,19 @@ export default function App() {
 
                 {/* Script/Details Panel */}
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 h-full max-h-[600px] overflow-y-auto custom-scrollbar flex flex-col">
-                  <h3 className="text-lg font-semibold mb-4 text-gray-200 flex items-center gap-2">
-                    <span className="w-2 h-6 bg-blue-500 rounded-full"></span>
-                    Shot List
-                  </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-200 flex items-center gap-2">
+                      <span className="w-2 h-6 bg-blue-500 rounded-full"></span>
+                      Shot List
+                    </h3>
+                    <button 
+                      onClick={handleCopyTranscript}
+                      className="text-xs flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-md border border-gray-700"
+                    >
+                      {isCopied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                      {isCopied ? "Copied" : "Copy Transcript"}
+                    </button>
+                  </div>
                   
                   <div className="space-y-2 flex-1">
                     {scenes.map((scene, idx) => (
